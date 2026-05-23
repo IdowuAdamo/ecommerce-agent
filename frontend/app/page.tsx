@@ -442,39 +442,99 @@ export default function Home() {
     setInput("");
     setIsLoading(true);
 
-    try {
-      const resp = await fetch(`${API_BASE}/api/v1/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId, message: text, stream: false }),
-      });
+    // Helper: fetch with a timeout (AbortController)
+    const fetchWithTimeout = async (url: string, options: RequestInit, ms: number) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), ms);
+      try {
+        return await fetch(url, { ...options, signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+    };
 
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
+    // Retry up to 2 times with a short delay — handles Render free-plan cold start
+    const MAX_RETRIES = 2;
+    let lastErr: Error | null = null;
 
-      const assistantMsg: ChatMessage = {
-        id: `a_${Date.now()}`,
-        role: "assistant",
-        content: data.message,
-        recommendations: data.recommendations || [],
-        explanations: data.explanations || [],
-        agentSteps: data.agent_steps || [],
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, assistantMsg]);
-    } catch (err) {
-      const errMsg: ChatMessage = {
-        id: `e_${Date.now()}`,
-        role: "assistant",
-        content: "Abeg, connection issue don happen. Make sure the backend is running and try again!",
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, errMsg]);
-    } finally {
-      setIsLoading(false);
-      inputRef.current?.focus();
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        // Show a "waking up" hint on the first retry
+        if (attempt === 1) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `wake_${Date.now()}`,
+              role: "assistant" as const,
+              content:
+                "Omo, the server dey wake up from sleep (free plan). Wait small — retrying...",
+              timestamp: new Date(),
+            },
+          ]);
+        }
+
+        // 25-second timeout per attempt
+        const resp = await fetchWithTimeout(
+          `${API_BASE}/api/v1/chat`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ session_id: sessionId, message: text, stream: false }),
+          },
+          25_000
+        );
+
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+
+        // Remove any "waking up" messages before showing the real response
+        setMessages((prev) => prev.filter((m) => !m.id?.startsWith("wake_")));
+
+        const assistantMsg: ChatMessage = {
+          id: `a_${Date.now()}`,
+          role: "assistant",
+          content: data.message,
+          recommendations: data.recommendations || [],
+          explanations: data.explanations || [],
+          agentSteps: data.agent_steps || [],
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, assistantMsg]);
+        lastErr = null;
+        break; // success — exit retry loop
+
+      } catch (err: unknown) {
+        lastErr = err instanceof Error ? err : new Error(String(err));
+        const isTimeout = lastErr.name === "AbortError";
+
+        if (attempt < MAX_RETRIES) {
+          // Wait 3 seconds before retrying (gives Render time to wake up)
+          await new Promise((r) => setTimeout(r, 3_000));
+          continue;
+        }
+
+        // All retries exhausted — show user-friendly error
+        setMessages((prev) => prev.filter((m) => !m.id?.startsWith("wake_")));
+        const errContent = isTimeout
+          ? "Server dey take too long to respond. If na Render free plan, wait 30 seconds and try again — e dey sleep when idle!"
+          : "Abeg, connection issue don happen. Check say NEXT_PUBLIC_API_URL correct for Vercel and backend dey run on Render.";
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `e_${Date.now()}`,
+            role: "assistant" as const,
+            content: errContent,
+            timestamp: new Date(),
+          },
+        ]);
+      }
     }
+
+    // Always reset loading state after success or all retries exhausted
+    setIsLoading(false);
+    inputRef.current?.focus();
   }, [isLoading]);
+
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

@@ -70,9 +70,22 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+# ── CORS ──────────────────────────────────────────────────────────────────────
+# CORSMiddleware does NOT support wildcard patterns like "*.vercel.app" in
+# allow_origins — it does exact string matching only.
+# Fix: use allow_origin_regex to cover all Vercel preview and production URLs.
+_cors_origins = list(s.cors_origins)
+if s.cors_origin:
+    # Exact URL added from CORS_ORIGIN env var (e.g. "https://naijashop-ai.vercel.app")
+    _cors_origins.append(s.cors_origin)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=s.cors_origins,
+    # allow_origins handles exact matches (localhost, known prod URL)
+    allow_origins=_cors_origins,
+    # allow_origin_regex handles ALL *.vercel.app subdomains (preview + prod)
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -23,8 +23,11 @@ class Settings(BaseSettings):
     cors_origins: list[str] = [
         "http://localhost:3000",
         "https://naijashop.vercel.app",
-        "https://*.vercel.app",          # Vercel preview deployments
     ]
+    # Set this to your exact Vercel URL in the Render env vars dashboard
+    # e.g. CORS_ORIGIN=https://naijashop-ai.vercel.app
+    # If not set, CORS falls back to allow_origins=["*"] (open for hackathon)
+    cors_origin: Optional[str] = None
 
     # ── OpenAI (Primary LLM Provider) ────────────────────────────────────────
     openai_api_key: str
