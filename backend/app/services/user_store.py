@@ -90,31 +90,34 @@ class UserStoreService:
                 )
                 if row:
                     return _row_to_profile(row)
+
+                # New session — create user + profile
+                user_id = str(uuid.uuid4())
+                await conn.execute(
+                    "INSERT INTO users (id, session_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                    user_id, session_id,
+                )
+                await conn.execute(
+                    """INSERT INTO user_profiles
+                       (user_id, session_id, preferred_categories, brand_affinity)
+                       VALUES ($1, $2, $3, $4)
+                       ON CONFLICT (session_id) DO NOTHING""",
+                    user_id, session_id, [], json.dumps({}),
+                )
+                row = await conn.fetchrow(
+                    "SELECT * FROM user_profiles WHERE session_id = $1", session_id
+                )
+                return _row_to_profile(row)
+
         except Exception as e:
             logger.warning(f"DB fallback for get_or_create_profile: {e}")
             if session_id not in self._memory_store:
                 self._memory_store[session_id] = UserProfile(
-                    user_id=str(uuid.uuid4()), session_id=session_id, persona_type=NigerianPersonaType.UNKNOWN
+                    user_id=str(uuid.uuid4()),
+                    session_id=session_id,
+                    persona_type=NigerianPersonaType.UNKNOWN,
                 )
             return self._memory_store[session_id]
-
-            # Create new user + profile
-            user_id = str(uuid.uuid4())
-            await conn.execute(
-                "INSERT INTO users (id, session_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-                user_id, session_id,
-            )
-            await conn.execute(
-                """INSERT INTO user_profiles
-                   (user_id, session_id, preferred_categories, brand_affinity)
-                   VALUES ($1, $2, $3, $4)
-                   ON CONFLICT (session_id) DO NOTHING""",
-                user_id, session_id, [], json.dumps({}),
-            )
-            row = await conn.fetchrow(
-                "SELECT * FROM user_profiles WHERE session_id = $1", session_id
-            )
-            return _row_to_profile(row)
 
     async def update_profile(self, session_id: str, updates: dict) -> None:
         try:

@@ -11,6 +11,7 @@ This agent is what makes NaijaShop AI uniquely competitive.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 
@@ -27,31 +28,87 @@ class TrustValueAgent:
     Uses the Jumia-trained DeBERTa model for fair price estimation.
     """
 
+    # Max products to run through DeBERTa inference (keeps thread time <15s on CPU)
+    MAX_DEBERTA_PRODUCTS = 25
+
     def __init__(self):
         self.price_model = PricePredictorModel.get_instance()
 
     async def run(self, state: AgentState) -> AgentState:
-        state.agent_trace.append("🔐 Trust & Value Agent: Scoring products...")
-        logger.info(f"Trust & Value Agent processing {len(state.raw_products)} products")
+        state.agent_trace.append("\U0001f510 Trust & Value Agent: Scoring products...")
+        products = state.raw_products
+        logger.info(f"Trust & Value Agent processing {len(products)} products")
 
-        scored: list[Product] = []
-        for product in state.raw_products:
-            try:
-                product = self._score_product(product)
+
+        # Split: first N get full DeBERTa pricing, rest get fast heuristic scoring
+        deberta_batch = products[:self.MAX_DEBERTA_PRODUCTS]
+        heuristic_batch = products[self.MAX_DEBERTA_PRODUCTS:]
+
+        # Run DeBERTa batch in a thread to keep the event loop free
+        def _score_with_deberta(batch):
+            scored = []
+            for product in batch:
+                try:
+                    product = self._score_product(product)
+                except Exception as e:
+                    logger.warning(f"Failed to score {product.name}: {e}")
+                    product = self._heuristic_score(product)
                 scored.append(product)
-            except Exception as e:
-                logger.warning(f"Failed to score {product.name}: {e}")
-                scored.append(product)  # still include, just unscored
+            return scored
 
+        deberta_scored = await asyncio.to_thread(_score_with_deberta, deberta_batch)
+
+        # Heuristic scoring (no DeBERTa, fast) for remaining products
+        heuristic_scored = [self._heuristic_score(p) for p in heuristic_batch]
+
+        scored = deberta_scored + heuristic_scored
         state.scored_products = scored
         fair_count = sum(
             1 for p in scored
             if p.price_fairness and p.price_fairness.verdict in ("fair", "great_deal")
         )
         state.agent_trace.append(
-            f"  → Scored {len(scored)} products, {fair_count} fair/great-deal priced"
+            f"  \u2192 Scored {len(scored)} products "
+            f"({len(deberta_batch)} full ML + {len(heuristic_batch)} heuristic), "
+            f"{fair_count} fair/great-deal priced"
         )
         return state
+
+    def _heuristic_score(self, product: Product) -> Product:
+        """Fast trust/fairness score using seller heuristics (no DeBERTa)."""
+        from app.schemas.product import PriceFairness, TrustScore
+        # Use discount % as a proxy for price fairness
+        disc = product.discount_pct or 0
+        if disc > 50:
+            verdict, fairness = "suspicious", 0.3
+        elif disc > 20:
+            verdict, fairness = "great_deal", 0.85
+        elif disc > 5:
+            verdict, fairness = "fair", 0.75
+        else:
+            verdict, fairness = "fair", 0.65
+
+        product.price_fairness = PriceFairness(
+            actual_price=product.price,
+            predicted_fair_price=product.price,
+            price_deviation_pct=0.0,
+            verdict=verdict,
+            fairness_score=fairness,
+            confidence=0.5,  # low confidence — heuristic only
+        )
+        trust_val = _score_seller(product.seller)
+        rating_val = _score_rating_authenticity(product.rating, product.num_reviews or 0)
+        review_val = _score_review_count(product.num_reviews)
+        overall = round(0.5 * trust_val + 0.3 * rating_val + 0.2 * review_val, 3)
+        product.trust_score = TrustScore(
+            overall=overall,
+            seller_quality=trust_val,
+            rating_authenticity=rating_val,
+            review_count_score=review_val,
+            discount_legitimacy=min(1.0, disc / 30) if disc else 0.5,
+        )
+        return product
+
 
     def _score_product(self, product: Product) -> Product:
         """Add price fairness and trust score to a product."""

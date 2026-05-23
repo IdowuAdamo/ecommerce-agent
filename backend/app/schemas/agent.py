@@ -44,8 +44,10 @@ class AgentState(BaseModel):
     extracted_intent: Optional[dict] = None
     budget_min: Optional[int] = None
     budget_max: Optional[int] = None
-    category: Optional[str] = None
+    category: Optional[str] = None          # raw category from discovery
+    resolved_category: Optional[str] = None  # canonical Jumia category key
     use_case: Optional[str] = None
+    business_context: Optional[str] = None   # e.g. "commercial", "personal"
     location_hint: Optional[str] = None
     urgency: str = "low"
     clarification_needed: bool = False

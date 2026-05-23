@@ -106,7 +106,6 @@ const EXAMPLE_QUERIES = [
   "Gaming laptop under ₦800k for heavy use",
 ];
 
-const SESSION_ID = `session_${Math.random().toString(36).slice(2, 11)}`;
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 // ── Components ────────────────────────────────────────────────────────────────
@@ -411,8 +410,18 @@ export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [sessionId, setSessionId] = useState<string>("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let sid = sessionStorage.getItem("naijashop_session_id");
+    if (!sid) {
+      sid = `session_${Math.random().toString(36).slice(2, 11)}`;
+      sessionStorage.setItem("naijashop_session_id", sid);
+    }
+    setSessionId(sid);
+  }, []);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -437,7 +446,7 @@ export default function Home() {
       const resp = await fetch(`${API_BASE}/api/v1/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: SESSION_ID, message: text, stream: false }),
+        body: JSON.stringify({ session_id: sessionId, message: text, stream: false }),
       });
 
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);

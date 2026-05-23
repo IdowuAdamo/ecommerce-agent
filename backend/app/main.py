@@ -10,6 +10,7 @@ Provides:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -17,6 +18,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 import structlog
+from collections import OrderedDict
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -76,7 +78,14 @@ app.add_middleware(
 )
 
 # In-memory session message store (use Redis in production)
-_session_history: dict[str, list[ChatMessage]] = {}
+_session_history: OrderedDict[str, list[ChatMessage]] = OrderedDict()
+MAX_SESSIONS = 500
+
+def _update_session(session_id: str, history: list[ChatMessage]):
+    _session_history[session_id] = history
+    _session_history.move_to_end(session_id)
+    while len(_session_history) > MAX_SESSIONS:
+        _session_history.popitem(last=False)
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -96,18 +105,38 @@ async def chat(request: ChatRequest):
     """
     Main conversational endpoint.
     Runs the full 7-agent pipeline and returns recommendations + explanations.
+    Hard timeout: 90s (prevents client ReadTimeout from pipeline hangs).
     """
+    PIPELINE_TIMEOUT = 90  # hard wall-clock cap for the full agent pipeline
+
     session_id = request.session_id
     history = _session_history.get(session_id, [])
 
     orchestrator: AgentOrchestrator = app.state.orchestrator
-    result = await orchestrator.run(session_id, request.message, history)
+    try:
+        result = await asyncio.wait_for(
+            orchestrator.run(session_id, request.message, history),
+            timeout=PIPELINE_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"Pipeline timeout after {PIPELINE_TIMEOUT}s for session {session_id}")
+        return ChatResponse(
+            session_id=session_id,
+            message=(
+                "Sorry, the request took too long to process. "
+                "Please try again — sometimes Jumia takes a while to respond!"
+            ),
+            recommendations=[],
+            explanations=[],
+            agent_steps=[f"Pipeline timeout after {PIPELINE_TIMEOUT}s"],
+            is_final=True,
+        )
 
     # Update session history
     history.append(ChatMessage(role="user", content=request.message))
     if result.final_response:
         history.append(ChatMessage(role="assistant", content=result.final_response))
-    _session_history[session_id] = history[-20:]  # Keep last 20 turns
+    _update_session(session_id, history[-20:])  # Keep last 20 turns
 
     return ChatResponse(
         session_id=session_id,
@@ -147,7 +176,7 @@ async def ws_chat(websocket: WebSocket, session_id: str):
             history.append(ChatMessage(role="user", content=query))
             if result.final_response:
                 history.append(ChatMessage(role="assistant", content=result.final_response))
-            _session_history[session_id] = history[-20:]
+            _update_session(session_id, history[-20:])
 
             await websocket.send_json({
                 "type": "complete",
@@ -188,7 +217,8 @@ async def evaluate_task_a(payload: dict):
     }
     """
     evaluator: EvaluationRunner = app.state.evaluator
-    results = evaluator.evaluate_task_a(
+    results = await asyncio.to_thread(
+        evaluator.evaluate_task_a,
         generated_reviews=payload.get("generated_reviews", []),
         reference_reviews=payload.get("reference_reviews", []),
         actual_prices=payload.get("actual_prices"),
@@ -212,7 +242,8 @@ async def evaluate_task_b(payload: dict):
     }
     """
     evaluator: EvaluationRunner = app.state.evaluator
-    results = evaluator.evaluate_task_b(
+    results = await asyncio.to_thread(
+        evaluator.evaluate_task_b,
         relevance_scores=payload.get("relevance_scores", []),
         predicted_scores=payload.get("predicted_scores", []),
         relevant_items=payload.get("relevant_items", []),

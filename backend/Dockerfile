@@ -14,7 +14,6 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 # Copy application code
 COPY app/ ./app/
-COPY .env* ./
 
 # Create non-root user
 RUN useradd -m -u 1000 naijashop && chown -R naijashop:naijashop /app

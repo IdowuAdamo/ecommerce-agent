@@ -1,246 +1,100 @@
-# 🇳🇬 NaijaShop AI — Multi-Agent Nigerian E-Commerce Intelligence Platform
+# NaijaShop AI
 
-> **DSN × BCT LLM Agent Challenge Hackathon Submission**
+**DSN x BCT LLM Agent Challenge Hackathon Submission**
 
-NaijaShop AI is a context-aware, multi-agent AI commerce platform that deeply understands Nigerian shopping behavior. It combines conversational AI, behavioral user modeling, live Jumia product scraping, DeBERTa-powered price fairness scoring, and Nigerian-localized review simulation.
+NaijaShop AI is a context-aware, multi-agent e-commerce intelligence platform tailored for the Nigerian market. It leverages conversational AI, behavioral user modeling, live data extraction, and a custom-trained DeBERTa price fairness model to provide transparent and hyper-personalized shopping recommendations.
 
----
+## System Architecture
 
-## ✨ Key Differentiators
+The platform operates via a directed acyclic graph (DAG) of 7 specialized AI agents:
 
-| Feature | What Makes It Unique |
-|---|---|
-| 🔬 **Price Fairness AI** | Fine-tuned DeBERTa-v3-small + LoRA on 18,360 Jumia products — estimates fair market prices |
-| 🇳🇬 **Nigerian Persona Modeling** | 6 archetypes: Budget Student, Lagos Professional, Nigerian Mum, Tech Enthusiast, Online Skeptic, Market Trader |
-| 🤖 **7-Agent Architecture** | LangGraph DAG with Discovery → UserModeling → CommerceIntel → TrustValue → Recommendation → Explanation → ReviewSim |
-| 🕷️ **Live Jumia Scraping** | robots.txt compliant, ClaudeBot UA, 15 product categories |
-| 📊 **Full Evaluation Suite** | NDCG@10, Hit Rate, MRR (Task B) + ROUGE, BERTScore, RMSE (Task A) |
+1. **Discovery Agent**: Extracts structured shopping intent, budget constraints, and cultural context from natural language queries.
+2. **User Modeling Agent**: Maps users to one of 6 predefined Nigerian archetypes (e.g., Budget Student, Lagos Professional) to handle cold-start recommendations.
+3. **Commerce Intelligence Agent**: Executes live scraping against target storefronts (respecting robots.txt) with vector-based semantic fallbacks.
+4. **Trust & Value Agent**: Evaluates price fairness using a fine-tuned DeBERTa-v3-small model and calculates seller trust metrics.
+5. **Recommendation Agent**: Ranks products using a multi-signal composite score and applies Maximal Marginal Relevance (MMR) for result diversity.
+6. **Explanation Agent**: Generates transparent, human-readable reasoning cards justifying each recommendation.
+7. **Review Simulation Agent**: (Task A) Synthesizes highly realistic Nigerian-style product reviews constrained by persona and price fairness data.
 
----
+## Key Features
 
-## 🏗️ Architecture
+- **Price Fairness Scoring**: Uses a DeBERTa-v3-small model (fine-tuned on 18,360 local e-commerce listings via LoRA) to predict market prices and flag overpriced items.
+- **Provider Failover Layer**: Features a robust LLM provider manager. OpenAI serves as the primary provider, with automatic failover to Gemini upon rate limits, timeouts, or API errors, ensuring high availability.
+- **Live Market Data**: Integrates live scraping capabilities targeting specific categories to ensure recommendations reflect current stock and pricing.
+- **Nigerian Contextualization**: Native understanding of local colloquialisms, slang, and cultural shopping constraints.
 
-```
-User Query
-    ↓
-[1] Conversational Discovery Agent  ← Extracts intent, budget, category, Nigerian signals
-    ↓
-[2] User Modeling Agent             ← Cold-start personas, behavioral priors
-    ↓
-[3] Commerce Intelligence Agent     ← Live Jumia scraping + Pinecone vector search
-    ↓
-[4] Trust & Value Agent ★           ← DeBERTa price prediction + fairness scoring
-    ↓
-[5] Recommendation & Ranking Agent  ← Composite scoring + MMR diversity
-    ↓
-[6] Explanation Agent               ← Transparent reasoning cards
-    ↓
-[7] Review Simulation Agent         ← Nigerian persona reviews (Task A)
-    ↓
-Final Response + Ranked Products + Explanations
-```
-
----
-
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 - Python 3.11+
 - Node.js 18+
-- Git
+- Docker and Docker Compose (optional but recommended)
 
-### 1-Command Setup
+### Environment Configuration
+
+Copy the example environment file and populate it with your credentials:
 
 ```bash
-git clone <repo-url>
-cd ecommerce-agent
-
-# Copy env template and fill in your API keys
-cp .env.example backend/.env
-
-# Start full stack
-make up
+cp .env.example .env
 ```
 
-Then open:
-- **Frontend:** http://localhost:3000
-- **API Docs:** http://localhost:8000/docs
-- **MLflow:** http://localhost:5000
+Required Keys:
+- `OPENAI_API_KEY`: Primary LLM provider.
+- `GEMINI_API_KEY`: Fallback LLM provider.
+- `HF_TOKEN`: HuggingFace token for the DeBERTa model (`Idowenst/ecommerce-price-predictor-v1`).
+- `SUPABASE_URL`: PostgreSQL database connection.
+- `PINECONE_API_KEY`: Vector database access.
 
-### Manual Setup (without Docker)
+### Running via Docker Compose (Recommended)
 
 ```bash
-# Backend
-cd backend
-pip install -r requirements.txt
-cp ../.env.example .env  # edit .env with your keys
-uvicorn app.main:app --reload --port 8000
+docker-compose up --build
+```
+This provisions the FastAPI backend, Next.js frontend, and Redis cache.
+- Frontend: `http://localhost:3000`
+- Backend API Docs: `http://localhost:8000/docs`
 
-# Frontend (new terminal)
+### Manual Setup
+
+**Backend:**
+```bash
+cd backend
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
+```
+
+**Frontend:**
+```bash
 cd frontend
 npm install
 npm run dev
 ```
 
----
+## API Documentation
 
-## 🔑 Environment Variables
+The backend exposes several REST and WebSocket endpoints:
 
-| Variable | Required | Description |
-|---|---|---|
-| `OPENAI_API_KEY` | ✅ | OpenAI API key (GPT-4o-mini used by default) |
-| `HF_TOKEN` | ✅ | HuggingFace token to load `Idowenst/ecommerce-price-predictor-v1` |
-| `SUPABASE_URL` | ✅ | Supabase project URL for PostgreSQL |
-| `PINECONE_API_KEY` | ✅ | Pinecone API key for vector search |
-| `PRICE_MODEL_DEVICE` | ⬜ | `cpu` (default) or `cuda` |
-| `OPENAI_MODEL` | ⬜ | `gpt-4o-mini` (default) or `gpt-4o` |
+- `POST /api/v1/chat`: Main conversational endpoint. Returns ranked products and explanation cards.
+- `WS /ws/chat/{session_id}`: WebSocket endpoint for real-time streaming of the agent reasoning trace.
+- `POST /api/v1/reviews/simulate`: Generates persona-driven product reviews (Task A evaluation).
+- `POST /api/v1/predict-price`: Direct interface to the DeBERTa price prediction model.
+- `POST /api/v1/evaluate/task-b`: Runs NDCG@10, HitRate, and MRR metrics against the recommendation engine.
 
----
+## Repository Structure
 
-## 📡 API Endpoints
+- `/backend`: FastAPI application, LangGraph agent orchestration, model definitions, and evaluation scripts.
+- `/frontend`: Next.js 14 web application featuring a glassmorphism UI and real-time agent trace streaming.
+- `/model_training`: Jupyter notebooks for fine-tuning the DeBERTa price prediction model.
 
-### Chat
-```http
-POST /api/v1/chat
-{
-  "session_id": "user_abc123",
-  "message": "Find me a laptop under ₦400k for machine learning"
-}
-```
+## Evaluation & Testing
 
-### Review Simulation (Task A)
-```http
-POST /api/v1/reviews/simulate
-{
-  "product_id": "prod001",
-  "product_name": "HP 255 G9 Laptop",
-  "product_category": "laptops",
-  "actual_price": 450000,
-  "predicted_fair_price": 420000,
-  "num_reviews": 3
-}
-```
-
-### Price Prediction
-```http
-POST /api/v1/predict-price
-{
-  "product_text": "category: laptops | name: HP 255 G9 | description: AMD Ryzen 5, 16GB RAM"
-}
-```
-
-### Evaluation (Task B)
-```http
-POST /api/v1/evaluate/task-b
-{
-  "relevance_scores": [[1, 0, 1, 0, 0]],
-  "predicted_scores": [[0.9, 0.3, 0.7, 0.2, 0.1]],
-  "relevant_items": [["prod1", "prod3"]],
-  "recommended_items": [["prod1", "prod5", "prod3", "prod2", "prod4"]],
-  "k": 10
-}
-```
-
----
-
-## 🧪 Running Evaluation
+Run the automated test suite and evaluation metrics:
 
 ```bash
-# Task A: ROUGE + BERTScore + RMSE
-make evaluate-a
-
-# Task B: NDCG@10 + HitRate + MRR
-make evaluate-b
-
-# All tests
-make test
-
-# Price model test
-make test-price-model
-
-# Live Jumia scraping test
-make scrape
+cd backend
+pytest tests/
 ```
 
----
-
-## 🧠 Price Predictor Model
-
-The core competitive advantage — a DeBERTa-v3-small + LoRA model trained on Jumia data:
-
-| Property | Value |
-|---|---|
-| Base Model | `microsoft/deberta-v3-small` |
-| Adapter | LoRA (r=8, α=16) |
-| Dataset | `Idowenst/jumia_dataset` (18,360 products) |
-| HuggingFace | `Idowenst/ecommerce-price-predictor-v1` |
-| Val RMSE | ₦142,632 |
-| Val MAE | ₦53,675 |
-
-**How it's used:**
-1. Every fetched product gets a predicted fair price
-2. Actual vs. predicted → fairness score (0-1)
-3. Fairness score feeds into recommendation ranking (25% weight)
-4. Fairness influences simulated review ratings (Task A)
-
----
-
-## 🌐 Jumia Scraping (robots.txt Compliant)
-
-- **User-Agent:** `ClaudeBot` (explicitly allowed by Jumia's robots.txt)
-- **Allowed paths:** Category listings (`/laptops/`, `/phones/`, etc.)
-- **Disallowed paths:** `/catalog/`, `/ratingreview/`, facet URLs — all respected
-- **Polite delay:** 2s between requests (configurable)
-- **Fallback:** Mock catalog if scraping fails
-
----
-
-## 🗂️ Project Structure
-
-```
-ecommerce-agent/
-├── backend/
-│   ├── app/
-│   │   ├── agents/          # All 7 AI agents + LangGraph orchestrator
-│   │   ├── models/          # DeBERTa price predictor + embeddings
-│   │   ├── services/        # Jumia scraper, Pinecone, PostgreSQL
-│   │   ├── schemas/         # Pydantic data models
-│   │   ├── evaluation/      # NDCG, ROUGE, BERTScore, RMSE
-│   │   ├── data/            # Mock catalog fallback
-│   │   └── main.py          # FastAPI application
-│   ├── tests/               # pytest unit tests
-│   ├── requirements.txt     # Pinned dependencies
-│   └── Dockerfile
-├── frontend/                # Next.js 14 + Tailwind premium UI
-├── model_training/          # price-predictor.ipynb (DeBERTa training)
-├── docker-compose.yml       # Full-stack container setup
-├── .env.example             # Environment template
-├── Makefile                 # One-command operations
-└── README.md
-```
-
----
-
-## 📊 Hackathon Scoring Strategy
-
-| Criterion | Our Approach | Expected Impact |
-|---|---|---|
-| Recommendation Quality | Composite scoring: semantic + behavioral + price fairness + trust | High |
-| Contextual Relevance | Nigerian persona priors + slot extraction | High |
-| Cold-Start Handling | 6 archetype templates mapped to Nigerian signals | High |
-| Agentic Reasoning | LangGraph DAG, agent trace exposed in UI | High |
-| Originality | DeBERTa price fairness — no other team has this | Very High |
-| Reproducibility | Docker Compose, Makefile, pinned deps, seed=42 | High |
-| Architecture Quality | Hexagonal architecture, async, typed schemas | High |
-| Task A (ROUGE/BERTScore) | GPT-4o with Nigerian persona-constrained prompting | High |
-| Task B (NDCG@10) | MMR reranking + multi-signal composite score | High |
-
----
-
-## 🤝 Team
-
-Built for the **DSN × BCT LLM Agent Challenge**
-
----
-
-*NaijaShop AI — because every Nigerian deserves fair prices and honest recommendations* 🇳🇬
+*NaijaShop AI — Intelligent, transparent commerce for the Nigerian market.*

@@ -1,7 +1,7 @@
 # NaijaShop AI — Backend Dependencies
 # Python 3.11+
 
-# ── Web Framework ────────────────────────────────────────────────────────────
+# ── Web Framework ─────────────────────────────────────────────────────────────
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
 websockets==13.1
@@ -15,7 +15,10 @@ langchain-core>=0.3.27,<0.4.0
 langchain-openai>=0.2.14
 openai>=1.58.1
 
-# ── ML / NLP ─────────────────────────────────────────────────────────────────
+# ── LLM Fallback Provider ─────────────────────────────────────────────────────
+google-generativeai>=0.8.0
+
+# ── ML / NLP ──────────────────────────────────────────────────────────────────
 torch==2.5.1
 transformers==4.47.1
 peft==0.14.0
@@ -44,10 +47,6 @@ lxml==5.3.0
 structlog==24.4.0
 prometheus-fastapi-instrumentator==7.0.0
 
-# ── Experiment Tracking ───────────────────────────────────────────────────────
-mlflow==2.19.0
-
 # ── Dev / Testing ─────────────────────────────────────────────────────────────
 pytest==8.3.4
 pytest-asyncio==0.24.0
-httpx==0.28.1

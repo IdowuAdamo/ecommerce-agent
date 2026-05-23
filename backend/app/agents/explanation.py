@@ -4,16 +4,18 @@ Agent 7: Explanation Agent.
 Generates transparent, human-readable recommendation explanations.
 Produces "reasoning cards" that justify why each product was recommended.
 Localizes explanations for Nigerian shopping context.
+Uses the centralized LLMProvider (OpenAI primary, Gemini fallback).
 """
 from __future__ import annotations
 
+import json
 import logging
-from openai import AsyncOpenAI
 
 from app.config import get_settings
 from app.schemas.agent import AgentState
 from app.schemas.product import RankedProduct
 from app.schemas.recommendation import ExplanationCard
+from app.services.llm_provider import LLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -28,19 +30,19 @@ For each product, generate a short explanation card (JSON) with:
   "nigerian_context": "one sentence with Nigerian-specific insight (delivery, power usage, etc.)"
 }
 
-Keep language clear, honest, and conversational. Mention ₦ amounts when relevant."""
+Keep language clear, honest, and conversational. Mention N amounts when relevant."""
 
 
 class ExplanationAgent:
     """Generates transparent explanation cards for recommendations."""
 
     def __init__(self):
+        self.provider = LLMProvider.get_instance()
         s = get_settings()
-        self.client = AsyncOpenAI(api_key=s.openai_api_key)
-        self.model = s.openai_model
+        self._model = s.openai_model  # Used for logging only
 
     async def run(self, state: AgentState) -> AgentState:
-        state.agent_trace.append("💡 Explanation Agent: Generating reasoning cards...")
+        state.agent_trace.append("Explanation Agent: Generating reasoning cards...")
         logger.info(f"Explaining {len(state.ranked_products)} recommendations")
 
         explanations: list[ExplanationCard] = []
@@ -64,7 +66,7 @@ class ExplanationAgent:
 
         # Generate final conversational response
         state.final_response = await self._generate_final_response(state)
-        state.agent_trace.append("  → Explanations and final response ready ✓")
+        state.agent_trace.append("  -> Explanations and final response ready")
         return state
 
     async def _explain_product(self, ranked: RankedProduct, state: AgentState) -> ExplanationCard:
@@ -72,17 +74,21 @@ class ExplanationAgent:
         fairness = p.price_fairness
         trust = p.trust_score
 
+        # Safe access for optional computed fields
+        fair_price_str = f"N{fairness.predicted_fair_price:,}" if fairness else "N/A"
+        fair_verdict = fairness.verdict if fairness else "unknown"
+        trust_overall = f"{trust.overall:.2f}" if trust else "N/A"
+        trust_flags = ", ".join(trust.flags) if trust and trust.flags else "None"
+
         context = f"""Product: {p.name}
-Price: ₦{p.price:,} | Predicted Fair Price: ₦{fairness.predicted_fair_price:,} | Verdict: {fairness.verdict}
+Price: N{p.price:,} | Predicted Fair Price: {fair_price_str} | Verdict: {fair_verdict}
 Rating: {p.rating or 'N/A'}/5 ({p.num_reviews or 0} reviews)
-Trust Score: {trust.overall:.2f} | Flags: {', '.join(trust.flags) or 'None'}
+Trust Score: {trust_overall} | Flags: {trust_flags}
 Ranking Score: {ranked.composite_score:.3f}
 User Query: {state.user_query}
 Category: {p.category} | Use Case: {state.use_case or 'general'}"""
 
-        import json
-        resp = await self.client.chat.completions.create(
-            model=self.model,
+        response = await self.provider.chat(
             messages=[
                 {"role": "system", "content": EXPLANATION_SYSTEM},
                 {"role": "user", "content": context},
@@ -91,7 +97,7 @@ Category: {p.category} | Use Case: {state.use_case or 'general'}"""
             temperature=0.3,
             max_tokens=256,
         )
-        data = json.loads(resp.choices[0].message.content)
+        data = json.loads(response.content)
 
         return ExplanationCard(
             product_id=p.id,
@@ -109,7 +115,7 @@ Category: {p.category} | Use Case: {state.use_case or 'general'}"""
 
         top3_names = [rp.product.name[:40] for rp in state.ranked_products[:3]]
         persona = state.user_persona.profile.persona_type.value if state.user_persona else "unknown"
-        budget = f"₦{state.budget_max:,}" if state.budget_max else "your budget"
+        budget = f"N{state.budget_max:,}" if state.budget_max else "your budget"
 
         prompt = f"""The user asked: "{state.user_query}"
 Persona: {persona}
@@ -122,13 +128,12 @@ Write a friendly 2-3 sentence Nigerian shopping assistant response that:
 3. Mentions price value and why it fits them
 Keep it conversational and warm. Use light Nigerian English (not heavy pidgin)."""
 
-        resp = await self.client.chat.completions.create(
-            model=self.model,
+        response = await self.provider.chat(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             max_tokens=150,
         )
-        return resp.choices[0].message.content.strip()
+        return response.content.strip()
 
     def _fallback_explanation(self, ranked: RankedProduct) -> ExplanationCard:
         p = ranked.product
@@ -136,10 +141,10 @@ Keep it conversational and warm. Use light Nigerian English (not heavy pidgin)."
         trust = p.trust_score
         return ExplanationCard(
             product_id=p.id,
-            headline=f"{p.name[:40]} — Rank #{ranked.rank}",
+            headline=f"{p.name[:40]} - Rank #{ranked.rank}",
             reasons=[
                 f"Relevance score: {ranked.semantic_score:.0%}",
-                f"Price: ₦{p.price:,}" + (f" (Fair: ₦{fairness.predicted_fair_price:,})" if fairness else ""),
+                f"Price: N{p.price:,}" + (f" (Fair: N{fairness.predicted_fair_price:,})" if fairness else ""),
                 f"Trust score: {trust.overall:.0%}" if trust else "Trust: N/A",
             ],
             warnings=trust.flags if trust else [],

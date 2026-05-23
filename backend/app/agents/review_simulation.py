@@ -17,12 +17,11 @@ import logging
 import random
 from typing import Optional
 
-from openai import AsyncOpenAI
-
 from app.config import get_settings
 from app.schemas.agent import AgentState
 from app.schemas.review import ReviewRequest, SimulatedReview
 from app.schemas.user import NigerianPersonaType, NigerianLocation
+from app.services.llm_provider import LLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +91,9 @@ class ReviewSimulationAgent:
 
     def __init__(self):
         s = get_settings()
-        self.client = AsyncOpenAI(api_key=s.openai_api_key)
-        self.model = "gpt-4o"  # Use full GPT-4o for quality reviews (Task A quality matters)
+        self.provider = LLMProvider.get_instance()
+        # Use the full model for review quality — fallback still applies
+        self._model_note = s.openai_model
 
     async def simulate_reviews(
         self, request: ReviewRequest
@@ -151,8 +151,7 @@ Sample slang to naturally incorporate: {", ".join(random.sample(persona["slang_e
 Write an authentic Nigerian review for this product."""
 
         try:
-            resp = await self.client.chat.completions.create(
-                model=self.model,
+            response = await self.provider.chat(
                 messages=[
                     {"role": "system", "content": REVIEW_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
@@ -161,7 +160,7 @@ Write an authentic Nigerian review for this product."""
                 temperature=0.85,
                 max_tokens=300,
             )
-            data = json.loads(resp.choices[0].message.content)
+            data = json.loads(response.content)
             star_rating = float(data.get("star_rating", suggested_rating))
             review_text = data.get("review_text", "")
             sentiment = data.get("sentiment", "neutral")

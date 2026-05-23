@@ -24,23 +24,82 @@ from app.schemas.product import Product
 logger = logging.getLogger(__name__)
 
 JUMIA_CATEGORIES: dict[str, str] = {
-    "laptops": "https://www.jumia.com.ng/laptops/",
-    "phones": "https://www.jumia.com.ng/phones-tablets/",
-    "televisions": "https://www.jumia.com.ng/televisions/",
-    "appliances": "https://www.jumia.com.ng/home-appliances/",
-    "generators": "https://www.jumia.com.ng/generators/",
-    "cameras": "https://www.jumia.com.ng/cameras/",
-    "audio": "https://www.jumia.com.ng/audio-video/",
-    "computing": "https://www.jumia.com.ng/computing/",
-    "gaming": "https://www.jumia.com.ng/video-games/",
-    "health": "https://www.jumia.com.ng/health-beauty/",
-    "fashion_men": "https://www.jumia.com.ng/men-clothing/",
-    "shoes_men": "https://www.jumia.com.ng/men-shoes/",
-    "fashion_women": "https://www.jumia.com.ng/women-clothing/",
-    "shoes_women": "https://www.jumia.com.ng/women-shoes/",
-    "baby": "https://www.jumia.com.ng/baby-products/",
-    "furniture": "https://www.jumia.com.ng/furniture/",
-    "sports": "https://www.jumia.com.ng/sports-outdoor/",
+    # ── Computing ─────────────────────────────────────────────────────────────
+    "laptops":              "https://www.jumia.com.ng/laptops/",
+    "gaming_laptops":       "https://www.jumia.com.ng/gaming-laptops/",
+    "desktops":             "https://www.jumia.com.ng/desktop-computers/",
+    "monitors":             "https://www.jumia.com.ng/computer-monitors/",
+    "printers":             "https://www.jumia.com.ng/printers/",
+    "networking":           "https://www.jumia.com.ng/networking-products/",
+    "computing":            "https://www.jumia.com.ng/computing/",
+
+    # ── Phones & Tablets ──────────────────────────────────────────────────────
+    "phones":               "https://www.jumia.com.ng/phones-tablets/",
+    "smartphones":          "https://www.jumia.com.ng/smartphones/",
+    "tablets":              "https://www.jumia.com.ng/tablets/",
+    "smartwatches":         "https://www.jumia.com.ng/smart-watches/",
+    "power_banks":          "https://www.jumia.com.ng/power-banks/",
+
+    # ── Electronics ───────────────────────────────────────────────────────────
+    "televisions":          "https://www.jumia.com.ng/televisions/",
+    "generators":           "https://www.jumia.com.ng/generators/",
+    "solar":                "https://www.jumia.com.ng/solar-inverters/",
+    "cameras":              "https://www.jumia.com.ng/cameras/",
+    "audio":                "https://www.jumia.com.ng/audio-video/",
+    "speakers":             "https://www.jumia.com.ng/speakers/",
+    "headphones":           "https://www.jumia.com.ng/headphones/",
+    "security":             "https://www.jumia.com.ng/security-surveillance/",
+
+    # ── Appliances (SUBCATEGORY-SPECIFIC) ─────────────────────────────────────
+    "appliances":           "https://www.jumia.com.ng/home-appliances/",
+    "refrigerators":        "https://www.jumia.com.ng/refrigerators/",
+    "freezers":             "https://www.jumia.com.ng/freezers/",
+    "washing_machines":     "https://www.jumia.com.ng/washing-machines/",
+    "air_conditioners":     "https://www.jumia.com.ng/air-conditioners/",
+    "fans":                 "https://www.jumia.com.ng/fans/",
+    "microwaves":           "https://www.jumia.com.ng/microwaves/",
+    "gas_cookers":          "https://www.jumia.com.ng/gas-cookers-ovens/",
+    "blenders":             "https://www.jumia.com.ng/blenders/",
+    "irons":                "https://www.jumia.com.ng/irons/",
+    "water_dispensers":     "https://www.jumia.com.ng/water-dispensers/",
+    "vacuum_cleaners":      "https://www.jumia.com.ng/vacuum-cleaners/",
+
+    # ── Fashion ───────────────────────────────────────────────────────────────
+    "fashion_men":          "https://www.jumia.com.ng/men-clothing/",
+    "fashion_women":        "https://www.jumia.com.ng/women-clothing/",
+    "shoes_men":            "https://www.jumia.com.ng/men-shoes/",
+    "shoes_women":          "https://www.jumia.com.ng/women-shoes/",
+    "bags":                 "https://www.jumia.com.ng/bags/",
+    "watches":              "https://www.jumia.com.ng/watches/",
+    "jewelry":              "https://www.jumia.com.ng/jewelry/",
+
+    # ── Health & Beauty ───────────────────────────────────────────────────────
+    "health":               "https://www.jumia.com.ng/health-beauty/",
+    "skincare":             "https://www.jumia.com.ng/skincare/",
+    "haircare":             "https://www.jumia.com.ng/hair-care/",
+    "makeup":               "https://www.jumia.com.ng/makeup/",
+    "vitamins":             "https://www.jumia.com.ng/vitamins-supplements/",
+
+    # ── Home & Office ─────────────────────────────────────────────────────────
+    "furniture":            "https://www.jumia.com.ng/furniture/",
+    "home_decor":           "https://www.jumia.com.ng/home-decor/",
+    "cookware":             "https://www.jumia.com.ng/cookware/",
+    "bedding":              "https://www.jumia.com.ng/bedding/",
+    "office_supplies":      "https://www.jumia.com.ng/office-supplies/",
+
+    # ── Supermarket ───────────────────────────────────────────────────────────
+    "groceries":            "https://www.jumia.com.ng/grocery/",
+
+    # ── Gaming ────────────────────────────────────────────────────────────────
+    "gaming":               "https://www.jumia.com.ng/video-games/",
+    "gaming_consoles":      "https://www.jumia.com.ng/gaming-consoles/",
+    "gaming_accessories":   "https://www.jumia.com.ng/gaming-accessories/",
+
+    # ── Baby ──────────────────────────────────────────────────────────────────
+    "baby":                 "https://www.jumia.com.ng/baby-products/",
+
+    # ── Sports ────────────────────────────────────────────────────────────────
+    "sports":               "https://www.jumia.com.ng/sports-outdoor/",
 }
 
 BASE_URL = "https://www.jumia.com.ng"

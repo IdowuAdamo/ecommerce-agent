@@ -20,12 +20,25 @@ class Settings(BaseSettings):
     app_version: str = "1.0.0"
     debug: bool = False
     log_level: str = "INFO"
-    cors_origins: list[str] = ["http://localhost:3000", "https://naijashop.vercel.app"]
+    cors_origins: list[str] = [
+        "http://localhost:3000",
+        "https://naijashop.vercel.app",
+        "https://*.vercel.app",          # Vercel preview deployments
+    ]
 
-    # ── OpenAI ───────────────────────────────────────────────────────────────
+    # ── OpenAI (Primary LLM Provider) ────────────────────────────────────────
     openai_api_key: str
     openai_model: str = "gpt-4o-mini"          # cost-efficient for hackathon
     openai_embedding_model: str = "text-embedding-3-small"
+
+    # ── Gemini (Fallback LLM Provider) ───────────────────────────────────────
+    gemini_api_key: Optional[str] = None
+    gemini_model: str = "gemini-1.5-flash"     # fast, cost-efficient fallback
+
+    # ── LLM Provider Configuration ────────────────────────────────────────────
+    llm_provider_priority: list[str] = ["openai", "gemini"]
+    llm_request_timeout: int = 25              # seconds per provider attempt
+    llm_max_retries: int = 1                   # 1 retry = 2 total attempts before giving up
 
     # ── HuggingFace (Price Predictor) ─────────────────────────────────────────
     hf_token: str
@@ -55,17 +68,14 @@ class Settings(BaseSettings):
     scraper_timeout_seconds: int = 15
 
     # ── Recommendation ───────────────────────────────────────────────────────
-    rec_semantic_weight: float = 0.25
-    rec_behavioral_weight: float = 0.20
-    rec_price_fairness_weight: float = 0.25
-    rec_trust_weight: float = 0.20
+    rec_semantic_weight: float = 0.20
+    rec_behavioral_weight: float = 0.15
+    rec_price_fairness_weight: float = 0.20
+    rec_trust_weight: float = 0.15
     rec_contextual_weight: float = 0.10
+    rec_budget_proximity_weight: float = 0.20
     rec_top_k: int = 10
     rec_diversity_lambda: float = 0.5          # MMR diversity parameter
-
-    # ── MLflow ───────────────────────────────────────────────────────────────
-    mlflow_tracking_uri: str = "http://localhost:5000"
-    mlflow_experiment_name: str = "naijashop-ai"
 
 
 @lru_cache(maxsize=1)

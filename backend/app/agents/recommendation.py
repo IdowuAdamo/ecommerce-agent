@@ -13,6 +13,7 @@ Optimized for NDCG@10 and Hit Rate.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 from typing import Optional
@@ -39,6 +40,8 @@ class RecommendationAgent:
         self.w_fairness = s.rec_price_fairness_weight
         self.w_trust = s.rec_trust_weight
         self.w_context = s.rec_contextual_weight
+        self.w_budget_proximity = s.rec_budget_proximity_weight
+        self.w_category = getattr(s, "rec_category_match_weight", 0.25)
         self.top_k = s.rec_top_k
         self.mmr_lambda = s.rec_diversity_lambda
 
@@ -52,13 +55,19 @@ class RecommendationAgent:
             return state
 
         try:
-            # Compute query embedding for semantic scoring
-            query_emb = self.embedder.embed(state.user_query)
+            # Compute query embedding (CPU-bound: run in thread to keep event loop free)
+            query_emb = await asyncio.to_thread(self.embedder.embed, state.user_query)
 
-            # Score each product
+            # Batch-embed all products in one model call (critical optimization)
+            product_texts = [
+                f"{p.name} {p.category} {p.description}"[:256] for p in products
+            ]
+            product_embs = await asyncio.to_thread(self.embedder.embed_batch, product_texts)
+
+            # Score each product using precomputed embeddings
             scored = [
-                self._compute_composite_score(p, query_emb, state.user_persona, state)
-                for p in products
+                self._compute_composite_score(p, emb, query_emb, state.user_persona, state)
+                for p, emb in zip(products, product_embs)
             ]
 
             # Sort by composite score
@@ -82,11 +91,13 @@ class RecommendationAgent:
                 for i, item in enumerate(selected)
             ]
 
-            state.agent_trace.append(
-                f"  → Ranked {len(state.ranked_products)} products. "
-                f"Top: '{state.ranked_products[0].product.name[:40]}...'"
-                if state.ranked_products else "  → No ranked products"
-            )
+            if state.ranked_products:
+                state.agent_trace.append(
+                    f"  → Ranked {len(state.ranked_products)} products. "
+                    f"Top: '{state.ranked_products[0].product.name[:40]}'"
+                )
+            else:
+                state.agent_trace.append("  → No ranked products")
 
         except Exception as e:
             logger.error(f"Recommendation Agent failed: {e}")
@@ -102,50 +113,119 @@ class RecommendationAgent:
     def _compute_composite_score(
         self,
         product: Product,
+        product_emb: list[float],
         query_emb: list[float],
-        persona: Optional[UserPersona],
+        persona,
         state: AgentState,
     ) -> dict:
-        # 1. Semantic similarity
-        product_text = f"{product.name} {product.category} {product.description}"[:256]
-        product_emb = self.embedder.embed(product_text)
+        # 1. Semantic similarity (uses precomputed embedding)
         semantic = self.embedder.cosine_similarity(query_emb, product_emb)
         semantic = max(0.0, semantic)
 
-        # 2. Behavioral match
+        # 2. Category match — hard gate against category leakage
+        category_match = self._category_match_score(product, state)
+
+        # 3. Behavioral match
         behavioral = self._behavioral_score(product, persona)
 
-        # 3. Price fairness (from DeBERTa model)
+        # 4. Price fairness (from DeBERTa model)
         fairness = 0.5  # default if not scored
         if product.price_fairness:
             fairness = product.price_fairness.fairness_score
 
-        # 4. Trust score
+        # 5. Trust score
         trust = 0.5  # default
         if product.trust_score:
             trust = product.trust_score.overall
 
-        # 5. Contextual relevance
+        # 6. Contextual relevance
         contextual = self._contextual_score(product, state)
 
+        # 7. Budget proximity (rewards products closer to max budget if provided)
+        budget_prox = self._budget_proximity_score(product, state)
+
+        # Normalize weights so they still sum to 1 with category_match added
+        total_w = (
+            self.w_semantic + self.w_category + self.w_behavioral
+            + self.w_fairness + self.w_trust + self.w_context + self.w_budget_proximity
+        )
         composite = (
             self.w_semantic * semantic
+            + self.w_category * category_match
             + self.w_behavioral * behavioral
             + self.w_fairness * fairness
             + self.w_trust * trust
             + self.w_context * contextual
-        )
+            + self.w_budget_proximity * budget_prox
+        ) / total_w
 
         return {
             "product": product,
             "composite": composite,
             "semantic": semantic,
+            "category_match": category_match,
             "behavioral": behavioral,
             "fairness": fairness,
             "trust": trust,
             "contextual": contextual,
+            "budget_prox": budget_prox,
             "embedding": product_emb,
         }
+
+    # ── Category Match \u2014 Anti-Leakage Scoring ───────────────────────────────
+    # Subcategory relationships: defines which product categories are related.
+    # An exact match = 1.0; a related sibling = 0.6; totally unrelated = 0.0.
+    _CATEGORY_SIBLINGS: dict[str, set[str]] = {
+        "freezers":         {"refrigerators"},
+        "refrigerators":    {"freezers"},
+        "washing_machines": {"appliances"},
+        "air_conditioners": {"fans", "appliances"},
+        "fans":             {"air_conditioners", "appliances"},
+        "microwaves":       {"gas_cookers", "appliances"},
+        "gas_cookers":      {"microwaves", "appliances"},
+        "blenders":         {"appliances"},
+        "irons":            {"appliances"},
+        "gaming_laptops":   {"laptops"},
+        "laptops":          {"gaming_laptops", "desktops"},
+        "smartphones":      {"phones", "tablets"},
+        "tablets":          {"smartphones", "phones"},
+        "speakers":         {"audio", "headphones"},
+        "headphones":       {"audio", "speakers"},
+        "gaming_consoles":  {"gaming", "gaming_accessories"},
+        "shoes_men":        {"fashion_men"},
+        "shoes_women":      {"fashion_women"},
+    }
+
+    def _category_match_score(self, product: Product, state: AgentState) -> float:
+        """
+        Scores how well a product's category matches the user's requested category.
+        - Exact subcategory match \u2192 1.0
+        - Known sibling/related subcategory \u2192 0.6
+        - Parent/child match \u2192 0.4
+        - Completely unrelated \u2192 0.0
+
+        This is the primary guard against 'category leakage' (e.g., irons
+        appearing in freezer results because both are 'appliances').
+        """
+        resolved_category = getattr(state, "_resolved_category", None) or state.category
+        if not resolved_category:
+            return 0.5  # No category constraint \u2014 neutral
+
+        wanted = resolved_category.lower().replace(" ", "_")
+        have = (product.category or "").lower().replace(" ", "_")
+
+        if have == wanted:
+            return 1.0  # Exact match
+
+        siblings = self._CATEGORY_SIBLINGS.get(wanted, set())
+        if have in siblings:
+            return 0.6  # Sibling/related
+
+        # Check parent-child: e.g. "appliances" is parent of "freezers"
+        if wanted in have or have in wanted:
+            return 0.4  # Partial hierarchical match
+
+        return 0.0  # No relationship \u2014 strongly penalise
 
     def _behavioral_score(self, product: Product, persona: Optional[UserPersona]) -> float:
         if not persona:
@@ -173,19 +253,63 @@ class RecommendationAgent:
 
         return min(1.0, max(0.0, score))
 
+    # Keywords that signal commercial/industrial product grade
+    _COMMERCIAL_SIGNALS = {
+        "commercial", "industrial", "business", "professional", "heavy duty",
+        "heavy-duty", "large capacity", "chest", "deep", "upright", "display",
+    }
+
     def _contextual_score(self, product: Product, state: AgentState) -> float:
         score = 0.5
 
         # Urgency — prefer in-stock items
         if state.urgency in ("medium", "high") and product.stock_info == "In stock":
-            score += 0.3
-
-        # Use-case match (keyword overlap)
-        use_case = (state.use_case or "").lower()
-        if use_case and use_case in product.description.lower():
             score += 0.2
 
+        # Use-case match (keyword overlap in name + description)
+        use_case = (state.use_case or "").lower()
+        product_text = (product.name + " " + (product.description or "")).lower()
+        if use_case and use_case in product_text:
+            score += 0.15
+
+        # Business context: boost products matching commercial-grade signals
+        business_ctx = getattr(state, "business_context", None)
+        if business_ctx == "commercial":
+            if any(signal in product_text for signal in self._COMMERCIAL_SIGNALS):
+                score += 0.25  # Strong boost for commercial intent
+
+        # Feature keyword match: if discovery extracted specific features, reward matches
+        features = state.extracted_intent.get("features", []) if state.extracted_intent else []
+        matched_features = sum(
+            1 for feat in features
+            if feat.lower() in product_text
+        )
+        if features:
+            score += 0.1 * (matched_features / len(features))
+
         return min(1.0, score)
+
+
+    def _budget_proximity_score(self, product: Product, state: AgentState) -> float:
+        """
+        Rewards products that reasonably match the user's budget ceiling.
+        High budget implies high quality expectation; don't just return cheap items.
+        """
+        if not state.budget_max:
+            return 0.5  # Neutral if no budget specified
+
+        ratio = product.price / state.budget_max
+
+        if 0.7 <= ratio <= 1.0:
+            return 1.0   # Perfect sweet spot (70-100% of budget)
+        elif 0.4 <= ratio < 0.7:
+            return 0.7   # Mid-range (40-70% of budget)
+        elif 1.0 < ratio <= 1.2:
+            return 0.6   # Slightly over budget stretch
+        elif ratio < 0.4:
+            return 0.3   # Suspiciously cheap for this budget (low quality proxy)
+        else:
+            return 0.0   # Way over budget
 
     def _mmr_rerank(self, scored: list[dict], query_emb: list[float], k: int) -> list[dict]:
         """
@@ -200,19 +324,25 @@ class RecommendationAgent:
         λ = self.mmr_lambda
 
         while len(selected) < k and remaining:
+            best_idx = 0
             if not selected:
                 # First item: just pick the top-scored
-                best = max(remaining, key=lambda x: x["composite"])
+                best_score = remaining[0]["composite"]
+                for i, item in enumerate(remaining):
+                    if item["composite"] > best_score:
+                        best_score = item["composite"]
+                        best_idx = i
             else:
                 # MMR score = λ * relevance - (1-λ) * max_similarity_to_selected
-                best = max(
-                    remaining,
-                    key=lambda x: λ * x["composite"] - (1 - λ) * self._max_sim_to_selected(
-                        x["embedding"], selected
-                    ),
-                )
-            selected.append(best)
-            remaining.remove(best)
+                best_mmr = -float("inf")
+                for i, item in enumerate(remaining):
+                    sim = self._max_sim_to_selected(item["embedding"], selected)
+                    mmr_score = λ * item["composite"] - (1 - λ) * sim
+                    if mmr_score > best_mmr:
+                        best_mmr = mmr_score
+                        best_idx = i
+            
+            selected.append(remaining.pop(best_idx))
 
         return selected
 
