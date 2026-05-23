@@ -1,7 +1,13 @@
 # NaijaShop AI — Backend Dependencies
 # Python 3.11+
+#
+# v2.0.0 — REMOVED heavy local ML dependencies:
+#   torch, transformers, peft, sentence-transformers, accelerate,
+#   huggingface-hub, bert-score
+# These were replaced by OpenAI API calls (price prediction + embeddings).
+# The original requirements are preserved in requirements.ml.txt for reference.
 
-# ── Web Framework ─────────────────────────────────────────────────────────────
+# ── Web Framework ──────────────────────────────────────────────────────────────
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
 websockets==13.1
@@ -18,19 +24,11 @@ openai>=1.58.1
 # ── LLM Fallback Provider ─────────────────────────────────────────────────────
 google-generativeai>=0.8.0
 
-# ── ML / NLP ──────────────────────────────────────────────────────────────────
-torch==2.5.1
-transformers==4.47.1
-peft==0.14.0
-sentence-transformers==3.3.1
-accelerate==1.2.1
-huggingface-hub==0.26.5
-
 # ── Evaluation ────────────────────────────────────────────────────────────────
 rouge-score==0.1.2
-bert-score==0.3.13
 scikit-learn==1.6.0
 numpy==1.26.4
+# bert-score removed (required torch); evaluation gracefully degrades without it
 
 # ── Vector Database ───────────────────────────────────────────────────────────
 pinecone==5.4.2

@@ -1,45 +1,44 @@
 # render.yaml — Render deployment configuration for NaijaShop AI
-# Place this file at the root of your repository.
+# v2.0.0: Downgraded from Standard (2 GB) to Starter (512 MB) plan.
+# No local ML models means memory usage dropped from ~2 GB to ~200 MB.
 # Docs: https://render.com/docs/blueprint-spec
 
 services:
-  # ── Backend: FastAPI + ML models ──────────────────────────────────────────
+  # ── Backend: FastAPI (API-only, no local ML models) ───────────────────────
   - type: web
     name: naijashop-backend
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
-    # Standard plan = 2 GB RAM / 1 CPU — required for PyTorch + DeBERTa
-    # Free plan (512 MB) will OOM during model load. Use Standard ($25/mo).
-    plan: standard
-    region: oregon            # US West — closest to HuggingFace / Pinecone
+    # Starter plan (512 MB RAM) is now sufficient — no PyTorch loaded locally.
+    # Free plan also works but spins down after 15 min of inactivity.
+    plan: starter
+    region: oregon
     healthCheckPath: /health
-    # Render sets $PORT automatically; our Dockerfile reads it
     envVars:
-      # ── Required secrets (set via Render dashboard — do NOT hardcode) ──
+      # ── Required secrets (set via Render dashboard — do NOT hardcode) ──────
       - key: OPENAI_API_KEY
         sync: false
       - key: GEMINI_API_KEY
-        sync: false
-      - key: HF_TOKEN
         sync: false
       - key: PINECONE_API_KEY
         sync: false
       - key: SUPABASE_URL
         sync: false
 
-      # ── Non-secret config (safe to commit) ───────────────────────────────
-      - key: PRICE_MODEL_ID
-        value: Idowenst/ecommerce-price-predictor-v1
-      - key: PRICE_MODEL_DEVICE
-        value: cpu
-      - key: PINECONE_INDEX_NAME
-        value: naijashop-products
+      # ── Non-secret config ─────────────────────────────────────────────────
       - key: OPENAI_MODEL
         value: gpt-4o-mini
+      - key: OPENAI_EMBEDDING_MODEL
+        value: text-embedding-3-small
       - key: GEMINI_MODEL
         value: gemini-1.5-flash
+      - key: PINECONE_INDEX_NAME
+        value: naijashop-products
       - key: LOG_LEVEL
         value: INFO
       - key: DEBUG
         value: "false"
+      # HF_TOKEN is now optional (only needed if reverting to DeBERTa model)
+      # - key: HF_TOKEN
+      #   sync: false

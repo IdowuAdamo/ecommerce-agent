@@ -39,18 +39,19 @@ logger = structlog.get_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
     logger.info("[STARTUP] NaijaShop AI starting up...")
-    # Pre-load ML models (blocking, done once)
+
+    # Initialise singleton clients (API-based — instant, no local model loading)
     try:
         EmbeddingModel.get_instance()
-        logger.info("[OK] Embedding model ready")
+        logger.info("[OK] OpenAI embedding client ready")
     except Exception as e:
-        logger.warning(f"Embedding model warmup failed: {e}")
+        logger.warning(f"Embedding client init failed: {e}")
 
     try:
         PricePredictorModel.get_instance()
-        logger.info("[OK] Price predictor ready")
+        logger.info("[OK] OpenAI price predictor client ready")
     except Exception as e:
-        logger.warning(f"Price predictor warmup failed (will load on first request): {e}")
+        logger.warning(f"Price predictor client init failed: {e}")
 
     app.state.orchestrator = AgentOrchestrator()
     app.state.review_agent = ReviewSimulationAgent()

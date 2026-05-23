@@ -1,0 +1,23 @@
+# NaijaShop AI — ML/Local Model Requirements (LEGACY)
+# Python 3.11+
+#
+# These dependencies were used by the original DeBERTa-v3-small + LoRA
+# price predictor and sentence-transformers embedding model.
+# They have been replaced by OpenAI API calls in v2.0.0.
+#
+# To re-enable the local ML stack:
+#   pip install -r requirements.ml.txt
+# And revert the commented-out code in:
+#   backend/app/models/price_predictor.py
+#   backend/app/models/embeddings.py
+
+# ── Local ML / NLP ────────────────────────────────────────────────────────────
+torch==2.5.1
+transformers==4.47.1
+peft==0.14.0
+sentence-transformers==3.3.1
+accelerate==1.2.1
+huggingface-hub==0.26.5
+
+# ── Evaluation (requires torch via bert-score) ────────────────────────────────
+bert-score==0.3.13

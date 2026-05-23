@@ -40,11 +40,13 @@ class Settings(BaseSettings):
     llm_request_timeout: int = 25              # seconds per provider attempt
     llm_max_retries: int = 1                   # 1 retry = 2 total attempts before giving up
 
-    # ── HuggingFace (Price Predictor) ─────────────────────────────────────────
-    hf_token: str
-    price_model_id: str = "Idowenst/ecommerce-price-predictor-v1"
-    price_model_max_len: int = 256
-    price_model_device: str = "cpu"            # set to "cuda" if GPU available
+    # ── HuggingFace (legacy — only needed if reverting to DeBERTa model) ───────
+    # hf_token is now Optional: the OpenAI-based price predictor does not
+    # require HuggingFace access. Set it only if re-enabling the DeBERTa model.
+    hf_token: Optional[str] = None
+    price_model_id: str = "Idowenst/ecommerce-price-predictor-v1"   # legacy ref
+    price_model_max_len: int = 256                                    # legacy ref
+    price_model_device: str = "cpu"                                   # legacy ref
 
     # ── Supabase / PostgreSQL ────────────────────────────────────────────────
     supabase_url: str
@@ -54,7 +56,7 @@ class Settings(BaseSettings):
     # ── Pinecone ─────────────────────────────────────────────────────────────
     pinecone_api_key: str
     pinecone_index_name: str = "naijashop-products"
-    pinecone_dimension: int = 384              # all-MiniLM-L6-v2
+    pinecone_dimension: int = 384              # text-embedding-3-small @ 384 dims
 
     # ── Redis (optional — falls back to in-memory) ───────────────────────────
     redis_url: Optional[str] = None

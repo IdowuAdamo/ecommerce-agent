@@ -1,13 +1,19 @@
 """
 Agent 4: Trust & Value Agent ★ (Core Competitive Differentiator)
 
-Uses the fine-tuned DeBERTa-v3-small + LoRA price predictor to:
+CHANGELOG — v2.0.0:
+  Price fairness scoring now uses the OpenAI API-based PricePredictorModel
+  instead of the DeBERTa fine-tuned model. Key changes:
+    - predict() is now async (HTTP call) → _score_product is now async
+    - All products receive full ML-based scoring (no DeBERTa batch cap needed)
+    - asyncio.to_thread() removed — no CPU-bound blocking; pure async HTTP
+    - Products are scored concurrently via asyncio.gather() for maximum speed
+
+Uses the OpenAI price predictor to:
   1. Estimate the fair market price for each product
   2. Calculate price fairness score (actual vs. predicted)
   3. Detect suspicious pricing, fake discounts, and poor value
   4. Generate trust scores from seller quality, rating authenticity, etc.
-
-This agent is what makes NaijaShop AI uniquely competitive.
 """
 from __future__ import annotations
 
@@ -25,13 +31,10 @@ logger = logging.getLogger(__name__)
 class TrustValueAgent:
     """
     Scores every product for price fairness and trustworthiness.
-    Uses the Jumia-trained DeBERTa model for fair price estimation.
+    Uses the OpenAI API price predictor for fair price estimation.
     """
 
-    # Max products to run through DeBERTa inference (keeps thread time <15s on CPU)
-    MAX_DEBERTA_PRODUCTS = 25
-
-    def __init__(self):
+    def __init__(self) -> None:
         self.price_model = PricePredictorModel.get_instance()
 
     async def run(self, state: AgentState) -> AgentState:
@@ -39,82 +42,35 @@ class TrustValueAgent:
         products = state.raw_products
         logger.info(f"Trust & Value Agent processing {len(products)} products")
 
+        # Score all products concurrently — each predict() is a fast async HTTP call.
+        # No asyncio.to_thread needed (no CPU-bound blocking).
+        tasks = [self._score_product(p) for p in products]
+        scored = list(await asyncio.gather(*tasks, return_exceptions=False))
 
-        # Split: first N get full DeBERTa pricing, rest get fast heuristic scoring
-        deberta_batch = products[:self.MAX_DEBERTA_PRODUCTS]
-        heuristic_batch = products[self.MAX_DEBERTA_PRODUCTS:]
-
-        # Run DeBERTa batch in a thread to keep the event loop free
-        def _score_with_deberta(batch):
-            scored = []
-            for product in batch:
-                try:
-                    product = self._score_product(product)
-                except Exception as e:
-                    logger.warning(f"Failed to score {product.name}: {e}")
-                    product = self._heuristic_score(product)
-                scored.append(product)
-            return scored
-
-        deberta_scored = await asyncio.to_thread(_score_with_deberta, deberta_batch)
-
-        # Heuristic scoring (no DeBERTa, fast) for remaining products
-        heuristic_scored = [self._heuristic_score(p) for p in heuristic_batch]
-
-        scored = deberta_scored + heuristic_scored
         state.scored_products = scored
         fair_count = sum(
             1 for p in scored
             if p.price_fairness and p.price_fairness.verdict in ("fair", "great_deal")
         )
         state.agent_trace.append(
-            f"  \u2192 Scored {len(scored)} products "
-            f"({len(deberta_batch)} full ML + {len(heuristic_batch)} heuristic), "
+            f"  \u2192 Scored {len(scored)} products (OpenAI API), "
             f"{fair_count} fair/great-deal priced"
         )
         return state
 
-    def _heuristic_score(self, product: Product) -> Product:
-        """Fast trust/fairness score using seller heuristics (no DeBERTa)."""
-        from app.schemas.product import PriceFairness, TrustScore
-        # Use discount % as a proxy for price fairness
-        disc = product.discount_pct or 0
-        if disc > 50:
-            verdict, fairness = "suspicious", 0.3
-        elif disc > 20:
-            verdict, fairness = "great_deal", 0.85
-        elif disc > 5:
-            verdict, fairness = "fair", 0.75
-        else:
-            verdict, fairness = "fair", 0.65
+    async def _score_product(self, product: Product) -> Product:
+        """Async: add price fairness and trust score to a product."""
+        try:
+            return await self._score_product_full(product)
+        except Exception as e:
+            logger.warning(f"Full scoring failed for {product.name!r}: {e}; using heuristic")
+            return self._heuristic_score(product)
 
-        product.price_fairness = PriceFairness(
-            actual_price=product.price,
-            predicted_fair_price=product.price,
-            price_deviation_pct=0.0,
-            verdict=verdict,
-            fairness_score=fairness,
-            confidence=0.5,  # low confidence — heuristic only
-        )
-        trust_val = _score_seller(product.seller)
-        rating_val = _score_rating_authenticity(product.rating, product.num_reviews or 0)
-        review_val = _score_review_count(product.num_reviews)
-        overall = round(0.5 * trust_val + 0.3 * rating_val + 0.2 * review_val, 3)
-        product.trust_score = TrustScore(
-            overall=overall,
-            seller_quality=trust_val,
-            rating_authenticity=rating_val,
-            review_count_score=review_val,
-            discount_legitimacy=min(1.0, disc / 30) if disc else 0.5,
-        )
-        return product
-
-
-    def _score_product(self, product: Product) -> Product:
-        """Add price fairness and trust score to a product."""
-        # ── Price Fairness (DeBERTa model) ────────────────────────────────────
+    async def _score_product_full(self, product: Product) -> Product:
+        """Full scoring: OpenAI price prediction + trust heuristics."""
+        # ── Price Fairness (OpenAI API) ───────────────────────────────────────
         input_text = product.to_model_input_text()
-        predicted_price = self.price_model.predict(input_text)
+        predicted_price = await self.price_model.predict(input_text)
         fairness_score, deviation_pct, verdict = (
             self.price_model.compute_price_fairness_score(product.price, predicted_price)
         )
@@ -129,7 +85,6 @@ class TrustValueAgent:
                 is_fake_discount = True
                 discount_legit = 0.3
         elif product.discount_pct and product.discount_pct > 60:
-            # Suspiciously high discount without old_price
             is_fake_discount = True
             discount_legit = 0.2
         elif product.discount_pct:
@@ -141,27 +96,22 @@ class TrustValueAgent:
             price_deviation_pct=round(deviation_pct, 1),
             verdict=verdict,
             fairness_score=round(fairness_score, 3),
-            confidence=0.85,  # model confidence (from training MAE)
+            confidence=0.80,   # OpenAI API confidence
             explanation=_fairness_explanation(verdict, deviation_pct, predicted_price),
         )
 
-        # ── Trust Score ────────────────────────────────────────────────────────
+        # ── Trust Score ───────────────────────────────────────────────────────
         flags: list[str] = []
 
-        # Seller score
         seller_score = _score_seller(product.seller)
 
-        # Rating authenticity
-        rating_score = 0.5  # default for no reviews
+        rating_score = 0.5
         if product.rating is not None and product.num_reviews is not None:
             rating_score = _score_rating_authenticity(product.rating, product.num_reviews)
         elif product.rating is not None:
             rating_score = 0.6
 
-        # Review count score
         review_score = _score_review_count(product.num_reviews)
-
-        # Stock reliability
         stock_score = 0.9 if product.stock_info == "In stock" else 0.3
 
         if is_fake_discount:
@@ -190,9 +140,46 @@ class TrustValueAgent:
             stock_reliability=round(stock_score, 3),
             flags=flags,
         )
-
         return product
 
+    def _heuristic_score(self, product: Product) -> Product:
+        """
+        Fast heuristic trust/fairness score — used as fallback when the
+        OpenAI API call fails (network error, rate limit, etc.).
+        """
+        disc = product.discount_pct or 0
+        if disc > 50:
+            verdict, fairness = "suspicious", 0.3
+        elif disc > 20:
+            verdict, fairness = "great_deal", 0.85
+        elif disc > 5:
+            verdict, fairness = "fair", 0.75
+        else:
+            verdict, fairness = "fair", 0.65
+
+        product.price_fairness = PriceFairness(
+            actual_price=product.price,
+            predicted_fair_price=product.price,
+            price_deviation_pct=0.0,
+            verdict=verdict,
+            fairness_score=fairness,
+            confidence=0.4,   # low confidence — heuristic only
+        )
+        trust_val = _score_seller(product.seller)
+        rating_val = _score_rating_authenticity(product.rating, product.num_reviews or 0)
+        review_val = _score_review_count(product.num_reviews)
+        overall = round(0.5 * trust_val + 0.3 * rating_val + 0.2 * review_val, 3)
+        product.trust_score = TrustScore(
+            overall=overall,
+            seller_quality=trust_val,
+            rating_authenticity=rating_val,
+            review_count_score=review_val,
+            discount_legitimacy=min(1.0, disc / 30) if disc else 0.5,
+        )
+        return product
+
+
+# ── Module-level helper functions ─────────────────────────────────────────────
 
 def _score_seller(seller: str | None) -> float:
     """Score seller quality. Jumia/official stores score highest."""
@@ -211,13 +198,12 @@ def _score_seller(seller: str | None) -> float:
 def _score_rating_authenticity(rating: float, num_reviews: int) -> float:
     """Flag suspicious rating patterns (too perfect, too few reviews)."""
     if num_reviews < 5:
-        return 0.5  # insufficient data
+        return 0.5
     if rating == 5.0 and num_reviews < 50:
-        return 0.4  # suspiciously perfect
+        return 0.4
     if rating < 2.5:
-        return 0.2  # poor product
-    # Good score range: 3.5–4.8 with many reviews
-    rating_norm = (rating - 1) / 4  # normalize to 0-1
+        return 0.2
+    rating_norm = (rating - 1) / 4
     review_norm = min(1.0, num_reviews / 500)
     return round(rating_norm * 0.6 + review_norm * 0.4, 3)
 
@@ -235,7 +221,7 @@ def _score_review_count(num_reviews: int | None) -> float:
 
 
 def _fairness_explanation(verdict: str, deviation_pct: float, predicted: float) -> str:
-    pred_fmt = f"₦{predicted:,.0f}"
+    pred_fmt = f"\u20a6{predicted:,.0f}"
     dev = abs(deviation_pct)
     if verdict == "great_deal":
         return f"Priced {dev:.0f}% below the estimated fair price of {pred_fmt}. Excellent value!"

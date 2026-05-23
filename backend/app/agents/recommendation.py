@@ -55,14 +55,14 @@ class RecommendationAgent:
             return state
 
         try:
-            # Compute query embedding (CPU-bound: run in thread to keep event loop free)
-            query_emb = await asyncio.to_thread(self.embedder.embed, state.user_query)
+            # Compute query embedding via OpenAI API (async, no thread needed)
+            query_emb = await self.embedder.embed(state.user_query)
 
-            # Batch-embed all products in one model call (critical optimization)
+            # Batch-embed all products in one API call (most efficient)
             product_texts = [
                 f"{p.name} {p.category} {p.description}"[:256] for p in products
             ]
-            product_embs = await asyncio.to_thread(self.embedder.embed_batch, product_texts)
+            product_embs = await self.embedder.embed_batch(product_texts)
 
             # Score each product using precomputed embeddings
             scored = [
@@ -321,7 +321,7 @@ class RecommendationAgent:
 
         selected: list[dict] = []
         remaining = list(scored)
-        λ = self.mmr_lambda
+        mmr_lambda = self.mmr_lambda
 
         while len(selected) < k and remaining:
             best_idx = 0
@@ -333,11 +333,11 @@ class RecommendationAgent:
                         best_score = item["composite"]
                         best_idx = i
             else:
-                # MMR score = λ * relevance - (1-λ) * max_similarity_to_selected
+                # MMR score = mmr_lambda * relevance - (1-mmr_lambda) * max_similarity_to_selected
                 best_mmr = -float("inf")
                 for i, item in enumerate(remaining):
                     sim = self._max_sim_to_selected(item["embedding"], selected)
-                    mmr_score = λ * item["composite"] - (1 - λ) * sim
+                    mmr_score = mmr_lambda * item["composite"] - (1 - mmr_lambda) * sim
                     if mmr_score > best_mmr:
                         best_mmr = mmr_score
                         best_idx = i
